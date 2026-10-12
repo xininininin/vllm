@@ -74,6 +74,12 @@ from vllm.v1.worker.worker_base import WorkerWrapperBase
 
 logger = init_logger(__name__)
 
+# RPCs that the engine issues once per step, and that every rank runs in the
+# same order. They carry the collectives that keep the ranks of a parallel
+# group in lockstep, so a rank that fails inside one of them has already
+# stopped partway through this step's collectives while its peers keep going.
+STEP_RPC_METHODS = frozenset({"execute_model", "sample_tokens", "execute_dummy_batch"})
+
 
 class FutureWrapper(Future):
     def __init__(
@@ -1060,11 +1066,25 @@ class WorkerProc:
             # Notes have been introduced in python 3.11
             if hasattr(e, "add_note"):
                 e.add_note(traceback.format_exc())
-            logger.exception("WorkerProc hit an exception.")
+            logger.exception(
+                "WorkerProc hit an exception in %s on rank %d.",
+                method if isinstance(method, str) else "<cloudpickled callable>",
+                self.rank,
+            )
             # enqueue_output converts the exception to a FAILURE response
             # containing its string representation before transport.
             if output_rank is None or self.rank == output_rank:
                 self.handle_output(e)
+            if isinstance(method, str) and method in STEP_RPC_METHODS:
+                # Terminate instead of returning to the busy loop, which
+                # would dequeue the next RPC and start the next step with
+                # this rank out of step with its peers. Its collectives would
+                # then pair with the wrong ones and desync the whole group.
+                # The FAILURE response enqueued above survives this process
+                # exiting (MessageQueue.shutdown does not drop pending
+                # messages), so the engine still sees the error, and the
+                # parent detects the death through the process sentinel.
+                raise
 
     @staticmethod
     def setup_proc_title_and_log_prefix(enable_ep: bool) -> None:

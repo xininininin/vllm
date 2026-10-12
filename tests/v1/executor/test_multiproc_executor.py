@@ -8,7 +8,11 @@ from typing import Any
 
 import pytest
 
-from vllm.v1.executor.multiproc_executor import MultiprocExecutor, WorkerProc
+from vllm.v1.executor.multiproc_executor import (
+    STEP_RPC_METHODS,
+    MultiprocExecutor,
+    WorkerProc,
+)
 from vllm.v1.outputs import DraftTokenIds
 
 
@@ -18,6 +22,20 @@ class _ExitWorkerLoop(RuntimeError):
 
 class _RpcPayload:
     pass
+
+
+class _FailingThenNextQueue:
+    """Serves a failing step RPC, and a second RPC if the worker comes back
+    for it."""
+
+    def __init__(self) -> None:
+        self.dequeue_count = 0
+
+    def dequeue(self, *, indefinite: bool):
+        assert indefinite
+        self.dequeue_count += 1
+        assert self.dequeue_count == 1, "worker dequeued another RPC after failing"
+        return "execute_model", (), {}, 0
 
 
 class _PayloadLifetimeCheckingQueue:
@@ -67,6 +85,87 @@ def test_execute_worker_rpc_returns_worker_exception():
     assert len(outputs) == 1
     assert isinstance(outputs[0], RuntimeError)
     assert str(outputs[0]) == "test error"
+
+
+def _worker_proc_stub(rank: int, worker: Any, outputs: list[Any]) -> Any:
+    worker_proc: Any = WorkerProc.__new__(WorkerProc)
+    worker_proc.rank = rank
+    worker_proc.worker = worker
+    worker_proc.handle_output = outputs.append
+    return worker_proc
+
+
+def _fail(*args, **kwargs):
+    raise RuntimeError("test error")
+
+
+@pytest.mark.parametrize("method", sorted(STEP_RPC_METHODS))
+@pytest.mark.parametrize("rank,is_output_rank", [(0, True), (1, False)])
+def test_step_rpc_failure_terminates_worker(caplog, method, rank, is_output_rank):
+    """A step RPC that raises must end the worker on every rank, not only on
+    the output rank. A rank that keeps serving RPCs after a failed step enters
+    the next step with its collectives out of step with its peers, which
+    mispairs them and deadlocks the whole parallel group."""
+    outputs: list[Any] = []
+    worker_proc = _worker_proc_stub(rank, SimpleNamespace(**{method: _fail}), outputs)
+
+    with pytest.raises(RuntimeError, match="test error"):
+        worker_proc._execute_worker_rpc((method, (), {}, 0))
+
+    # The failure must be attributable: rank and method in the message, and the
+    # original traceback in the log record.
+    record = caplog.records[-1]
+    assert method in record.getMessage()
+    assert f"rank {rank}" in record.getMessage()
+    assert record.exc_info is not None
+    assert record.exc_info[0] is RuntimeError
+
+    # The output rank still reports the failure to the engine; the non-output
+    # rank has no result to report and must not pretend it succeeded.
+    if is_output_rank:
+        assert len(outputs) == 1
+        assert isinstance(outputs[0], RuntimeError)
+        assert str(outputs[0]) == "test error"
+    else:
+        assert outputs == []
+
+
+@pytest.mark.parametrize("method", sorted(STEP_RPC_METHODS))
+def test_step_rpc_success_is_unchanged(method):
+    outputs: list[Any] = []
+    worker_proc = _worker_proc_stub(
+        0, SimpleNamespace(**{method: lambda: "step output"}), outputs
+    )
+
+    worker_proc._execute_worker_rpc((method, (), {}, 0))
+
+    assert outputs == ["step output"]
+
+
+def test_non_step_rpc_failure_does_not_terminate_worker():
+    """Only step RPCs are fatal. Every other RPC keeps its existing semantics
+    of reporting the failure and returning to the busy loop."""
+    outputs: list[Any] = []
+    worker_proc = _worker_proc_stub(
+        0, SimpleNamespace(take_draft_token_ids=_fail), outputs
+    )
+
+    worker_proc._execute_worker_rpc(("take_draft_token_ids", (), {}, 0))
+
+    assert len(outputs) == 1
+    assert isinstance(outputs[0], RuntimeError)
+
+
+def test_worker_busy_loop_does_not_dequeue_after_step_failure():
+    queue = _FailingThenNextQueue()
+    outputs: list[Any] = []
+    worker_proc = _worker_proc_stub(0, SimpleNamespace(execute_model=_fail), outputs)
+    worker_proc.rpc_broadcast_mq = queue
+
+    with pytest.raises(RuntimeError, match="test error"):
+        worker_proc.worker_busy_loop()
+
+    assert queue.dequeue_count == 1
 
 
 @pytest.mark.parametrize("stalled", [False, True])
