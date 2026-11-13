@@ -23,7 +23,7 @@ def reconcile_nvfp4_moe_w13_scales(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Reconcile fused MoE gate/up weights to one scale per expert.
 
-    The block scales are adjusted so that ``block_scale * scale_2`` is
+    The block scales are adjusted so that `block_scale * scale_2` is
     preserved, within E4M3 rounding error.
     """
     gate_scale_2 = w13_scale_2[:, 0]

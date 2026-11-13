@@ -5,7 +5,7 @@
 Run `pytest tests/quantization/test_nvfp4_utils.py`.
 
 `tests/quantization/test_modelopt.py` already unit-tests
-``reconcile_nvfp4_moe_w13_scales`` on hand-picked scale pairs. This file adds
+`reconcile_nvfp4_moe_w13_scales` on hand-picked scale pairs. This file adds
 what that coverage does not reach:
 
 * the effective-dequantization-scale invariant across the whole mismatch range
@@ -15,10 +15,10 @@ what that coverage does not reach:
   shrink, and the caller's tensors are never written through;
 * the three production call sites (ModelOpt, Quark, compressed-tensors). Each
   must pass the reconciled block scales and the shared per-expert scale to
-  ``convert_to_nvfp4_moe_kernel_format``, and each must leave
-  ``NvFp4MoeBackend.HUMMING`` on the original gate-scale path, because
-  Humming's converter re-reads ``layer.w13_weight_scale*`` and folds each
-  half's ``scale_2`` itself.
+  `convert_to_nvfp4_moe_kernel_format`, and each must leave
+  `NvFp4MoeBackend.HUMMING` on the original gate-scale path, because
+  Humming's converter re-reads `layer.w13_weight_scale*` and folds each
+  half's `scale_2` itself.
 
 CPU only: no CUDA device and no real kernel is touched.
 """
@@ -53,8 +53,8 @@ def _mismatched_w13(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Build a fused w13 whose gate and up global scales disagree per expert.
 
-    Block scales stay in ``[0.25, 1.0]`` and rescale factors stay at or above
-    0.1, so every reconciled block scale lands at or above ``2**-6`` and stays
+    Block scales stay in `[0.25, 1.0]` and rescale factors stay at or above
+    0.1, so every reconciled block scale lands at or above `2**-6` and stays
     in the e4m3 *normal* range. That keeps the invariant test bounded by one
     half-ulp instead of by subnormal spacing.
     """
@@ -69,10 +69,10 @@ def _mismatched_w13(
 
 
 def test_reconcile_preserves_each_half_effective_scale_over_reported_range():
-    """``block_scale * scale_2`` survives the move onto one shared scale.
+    """`block_scale * scale_2` survives the move onto one shared scale.
 
     This is the numerical claim of the fix: the up half keeps meaning
-    ``block * gs_up`` rather than silently becoming ``block * gs_gate``. It is
+    `block * gs_up` rather than silently becoming `block * gs_gate`. It is
     checked here over 8 experts whose gate/up ratios sweep 0.1x to 10x -- the
     range #54974 measured on a real checkpoint -- rather than on a few
     hand-chosen power-of-two pairs.
@@ -96,9 +96,9 @@ def test_reconcile_never_grows_a_block_scale():
     """Guard: block scales only shrink, so e4m3 cannot overflow.
 
     The shared scale is the per-expert *maximum*, which makes every rescale
-    factor ``<= 1``. This holds before the fix as well (nothing was rescaled
+    factor `<= 1`. This holds before the fix as well (nothing was rescaled
     at all); it is here so that a later change to a smaller shared scale --
-    ``torch.maximum`` -> ``torch.minimum`` fails this test -- cannot quietly
+    `torch.maximum` -> `torch.minimum` fails this test -- cannot quietly
     push block scales towards e4m3's 448 ceiling.
     """
     w13_scale, w13_scale_2 = _mismatched_w13(8, 6, 3, seed=1)
@@ -112,10 +112,10 @@ def test_reconcile_never_grows_a_block_scale():
 def test_reconcile_does_not_write_through_to_its_arguments():
     """Guard: reconciliation is out of place.
 
-    All three call sites hand ``layer.w13_weight_scale`` straight in and pass
-    the *returned* tensor on, while Humming re-reads ``layer`` itself. If
+    All three call sites hand `layer.w13_weight_scale` straight in and pass
+    the *returned* tensor on, while Humming re-reads `layer` itself. If
     reconciliation ever started writing through to its argument, Humming would
-    see rescaled block scales underneath the ``scale_2`` folding its own
+    see rescaled block scales underneath the `scale_2` folding its own
     converter performs, double-applying the correction on the very backend the
     call sites deliberately skip.
     """
@@ -208,7 +208,7 @@ _CALL_SITES = {
 
 
 def _run_process_weights(call_site: str, backend: NvFp4MoeBackend) -> dict[str, Any]:
-    """Drive ``process_weights_after_loading`` and capture the converter call."""
+    """Drive `process_weights_after_loading` and capture the converter call."""
     module, cls_name, make_layer = _CALL_SITES[call_site]
     method_cls = getattr(module, cls_name)
     layer = make_layer()
@@ -240,12 +240,12 @@ def _run_process_weights(call_site: str, backend: NvFp4MoeBackend) -> dict[str, 
 def test_nvfp4_moe_call_site_passes_reconciled_w13_scales(call_site):
     """Every NVFP4 MoE method must hand the kernel the reconciled scales.
 
-    ``reconcile_nvfp4_moe_w13_scales`` is only useful if its result actually
-    reaches ``convert_to_nvfp4_moe_kernel_format``; each of the three methods
+    `reconcile_nvfp4_moe_w13_scales` is only useful if its result actually
+    reaches `convert_to_nvfp4_moe_kernel_format`; each of the three methods
     computes it separately, so each is pinned separately here. For
     compressed-tensors this also pins the divisor-to-multiplier inversion:
     global scales are stored as divisors there, so the shared scale must come
-    out as ``1 / min(divisors)``.
+    out as `1 / min(divisors)`.
     """
     kwargs = _run_process_weights(call_site, NvFp4MoeBackend.VLLM_CUTLASS)
 
@@ -257,10 +257,10 @@ def test_nvfp4_moe_call_site_passes_reconciled_w13_scales(call_site):
 def test_nvfp4_moe_call_site_leaves_humming_untouched(call_site):
     """Guard: Humming keeps the pre-existing gate-scale-only behaviour.
 
-    ``convert_to_nvfp4_moe_kernel_format`` ignores the ``w13_scale`` /
-    ``w13_scale_2`` it is given on the Humming path -- it calls
-    ``convert_to_humming_moe_kernel_format(layer, ...)`` and then re-reads the
-    scales off ``layer``, folding each half's own ``scale_2`` into bf16 block
+    `convert_to_nvfp4_moe_kernel_format` ignores the `w13_scale` /
+    `w13_scale_2` it is given on the Humming path -- it calls
+    `convert_to_humming_moe_kernel_format(layer, ...)` and then re-reads the
+    scales off `layer`, folding each half's own `scale_2` into bf16 block
     scales. Reconciling first would therefore double-apply the correction.
 
     This assertion holds both before and after the fix, so it is a guard
