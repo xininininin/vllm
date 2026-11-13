@@ -218,9 +218,10 @@ def _run_process_weights(call_site: str, backend: NvFp4MoeBackend) -> dict[str, 
     method.nvfp4_backend = backend
     method.experts_cls = Mock()
     method.use_a16 = False
-    if call_site == "modelopt":
-        # ModelOpt's loader consults per_token_activation (upstream added
-        # per-token NVFP4 activation handling); the other methods do not.
+    if call_site in ("modelopt", "compressed_tensors"):
+        # The ModelOpt and compressed-tensors loaders consult
+        # per_token_activation (per-token NVFP4 activation handling); Quark's
+        # does not.
         method.per_token_activation = False
 
     convert = Mock(return_value=tuple(torch.zeros(1) for _ in range(8)))
